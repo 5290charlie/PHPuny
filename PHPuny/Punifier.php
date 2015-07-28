@@ -11,6 +11,12 @@
 
 namespace PHPuny;
 
+// Regular expression to match all valid php variable identifiers
+// http://php.net/language.variables.basics
+define('REGEX_VARIABLE', '\$([a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*)');
+define('REGEX_CONSTANT', 'define *\([\'|"]([a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*)[\'|"]');
+define('REGEX_FUNCTION', 'function *([a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*)');
+
 /**
  * Punifier
  *
@@ -56,7 +62,7 @@ class Punifier
     /**
      * This character is only active when certain look ahead actions take place.
      *
-     *  @var string
+     * @var string
      */
     protected $c;
 
@@ -109,19 +115,122 @@ class Punifier
         'HTTP_RAW_POST_DATA',
         'http_response_header',
         'argc',
-        'argv'
+        'argv',
+        'this',
+    );
+
+    /**
+     * List of reserved PHP constants (do not shorten these names)
+     * http://php.net/manual/en/reserved.constants.php
+     *
+     * @var array
+     */
+    protected static $reservedConstants = array(
+        '__CLASS__',
+        '__DIR__',
+        '__FILE__',
+        '__FUNCTION__',
+        '__LINE__',
+        '__METHOD__',
+        '__NAMESPACE__',
+        '__TRAIT__'
+    );
+
+    /**
+     * List of reserved PHP keywords (do not use these as short names)
+     * http://php.net/manual/en/reserved.keywords.php
+     *
+     * @var array
+     */
+    protected static $reservedKeywords = array(
+        'abstract',
+        'and',
+        'array',
+        'as',
+        'break',
+        'callable',
+        'case',
+        'catch',
+        'class',
+        'clone',
+        'const',
+        'continue',
+        'declare',
+        'default',
+        'die',
+        'do',
+        'echo',
+        'else',
+        'elseif',
+        'empty',
+        'enddeclare',
+        'endfor',
+        'endforeach',
+        'endif',
+        'endswitch',
+        'endwhile',
+        'eval',
+        'exit',
+        'extends',
+        'final',
+        'for',
+        'foreach',
+        'function',
+        'global',
+        'goto',
+        'if',
+        'implements',
+        'include',
+        'include_once',
+        'instanceof',
+        'insteadof',
+        'interface',
+        'isset',
+        'list',
+        'namespace',
+        'new',
+        'or',
+        'print',
+        'private',
+        'protected',
+        'public',
+        'require',
+        'require_once',
+        'return',
+        'static',
+        'switch',
+        'throw',
+        'trait',
+        'try',
+        'unset',
+        'use',
+        'var',
+        'while',
+        'xor'
+    );
+
+    /**
+     * Array housing regular expressions for pulling out tokens
+     *
+     * @var array
+     */
+    protected static $tokenRegexes = array(
+        'func' => REGEX_FUNCTION,
+        'var' => REGEX_VARIABLE,
+        'const' => REGEX_CONSTANT,
     );
 
     /**
      * Takes a string containing php and removes unneeded characters in
      * order to shrink the code without altering it's functionality.
      *
-     * @param  string      $php      The raw php to be punified
-     * @param  array       $options Various runtime options in an associative array
+     * @param  string $php The raw php to be punified
+     * @param  array $options Various runtime options in an associative array
      * @throws \Exception
      * @return bool|string
      */
-    public static function punify($php, $options = array()) {
+    public static function punify($php, $options = array())
+    {
         try {
             ob_start();
 
@@ -155,10 +264,11 @@ class Punifier
      * Processes a php string and outputs only the required characters,
      * stripping out all unneeded characters.
      *
-     * @param string $php      The raw php to be punified
-     * @param array  $options Various runtime options in an associative array
+     * @param string $php The raw php to be punified
+     * @param array $options Various runtime options in an associative array
      */
-    protected function punifyDirectToOutput($php, $options) {
+    protected function punifyDirectToOutput($php, $options)
+    {
         $this->initialize($php, $options);
         $this->loop();
         $this->clean();
@@ -167,10 +277,11 @@ class Punifier
     /**
      * Initializes internal variables, normalizes new lines,
      *
-     * @param string $php      The raw php to be punified
-     * @param array  $options Various runtime options in an associative array
+     * @param string $php The raw php to be punified
+     * @param array $options Various runtime options in an associative array
      */
-    protected function initialize($php, $options) {
+    protected function initialize($php, $options)
+    {
         $this->options = array_merge(static::$defaultOptions, $options);
         $this->input = $this->prepareInput($php);
 
@@ -192,24 +303,41 @@ class Punifier
      * @return mixed
      * @throws \Exception
      */
-    protected function prepareInput($php) {
+    protected function prepareInput($php)
+    {
         // Normalize extraneous characters
+        $php = preg_replace('/\/\*\*\/[^ *\'|"|`]/', '', $php);
         $php = str_replace("\r\n", "\n", $php);
-        $php = str_replace('/**/', '', $php);
         $php = str_replace("\r", "\n", $php);
 
-        // Regular expression to match all valid php variable identifiers
-        // http://php.net/language.variables.basics
-        preg_match_all('/\$([a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*)|define\([\'|"]([a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*)[\'|"]/', $php, $matches);
+        $search = '';
 
-        // $matches[1] is variable list without leading '$'
-        if (isset($matches[1])) {
-            $php = $this->shortenMatches($php, $matches[1]);
+        $i = 0;
+
+        foreach (self::$tokenRegexes as $regex) {
+            if ($i > 0) {
+                $search .= '|';
+            }
+
+            $search .= $regex;
+
+            $i++;
         }
 
-        // $matches[2] is constant list
-        if (isset($matches[2])) {
-            $php = $this->shortenMatches($php, $matches[2], false);
+        if ($search != '') {
+            $search = "/$search/";
+
+            preg_match_all($search, $php, $matches);
+
+            $i = 1;
+
+            foreach (self::$tokenRegexes as $type => $regex) {
+                if (isset($matches[$i])) {
+                    $php = $this->shortenMatches($php, $matches[$i], $type);
+                }
+
+                $i++;
+            }
         }
 
         return $php;
@@ -220,38 +348,46 @@ class Punifier
      *
      * @param $php
      * @param $matches
-     * @param bool|true $is_var
+     * @param $type
      * @return mixed
      */
-    protected function shortenMatches($php, $matches, $is_var = true) {
+    protected function shortenMatches($php, $matches, $type)
+    {
         // Only relevant if there are variables to shorten!
         if (count($matches) > 0) {
+            // Variable to for first character of this type
+            $t = substr($type, 0, 1);
+
             // Initialize an empty arrays to track variables before/after name shortening
-            $old = $new = array();
+            $old = array();
 
-            // Loop through all variables found
-            foreach ($matches as $var) {
-                $var = trim($var);
+            // Loop through all matches found
+            foreach ($matches as $match) {
+                $match = trim($match);
 
-                // Make sure we only track custom (not reserved), non-empty matches once
-                if ($var != '' && !in_array($var, self::$reservedVariables) && !isset($old[$var])) {
-                    // Only add at this point if it's a variable or a new constant (not defined yet)
-                    if ($is_var || !defined($var)) {
-                        $old[$var] = $this->nextShort++;
+                // Make sure we only track non-empty matches once
+                if ($match != '' && !isset($old[$match])) {
+                    // Make sure we don't replace a reserved constant or variable
+                    if (!in_array($match, ($type == 'const' ? self::$reservedConstants : self::$reservedVariables))) {
+                        do {
+                            $next = $t . $this->nextShort++;
+                        } while (in_array($next, $matches) || in_array($next, self::$reservedKeywords));
+
+                        $old[$match] = $next;
                     }
                 }
             }
 
             // Go through all unique variables and find a corresponding unique short name
-            foreach ($old as $var => $short) {
-                $search = ($is_var ? '$' : '') . $var;
-                $replace = ($is_var ? '$' : '') . $short;
+            foreach ($old as $match => $short) {
+                $search = '/' . ($type == 'var' ? '([\-\>|\$])' : '') . '\b' . $match . '\b/';
+                $replace = ($type == 'var' ? '$1' : '') . $short;
 
-                if (!$is_var) {
+                if ($type == 'const') {
                     $replace = strtoupper($replace);
                 }
 
-                $php = str_replace($search, $replace, $php);
+                $php = preg_replace($search, $replace, $php);
             }
         }
 
@@ -262,7 +398,8 @@ class Punifier
      * The primary action occurs here. This function loops through the input string,
      * outputting anything that's relevant and discarding anything that is not.
      */
-    protected function loop() {
+    protected function loop()
+    {
         while ($this->a !== false && !is_null($this->a) && $this->a !== '') {
 
             switch ($this->a) {
@@ -277,15 +414,16 @@ class Punifier
 
                     // if B is a space we skip the rest of the switch block and go down to the
                     // string/regex check below, resetting $this->b with getReal
-                    if($this->b === ' ') {
+                    if ($this->b === ' ') {
                         break;
                     }
 
                 // otherwise we treat the newline like a space
 
                 case ' ':
-                    if(static::isAlphaNumeric($this->b))
+                    if (static::isAlphaNumeric($this->b)) {
                         echo $this->a;
+                    }
 
                     $this->saveString();
                     break;
@@ -306,7 +444,7 @@ class Punifier
                             break;
 
                         case ' ':
-                            if(!static::isAlphaNumeric($this->a)) {
+                            if (!static::isAlphaNumeric($this->a)) {
                                 break;
                             }
 
@@ -326,7 +464,7 @@ class Punifier
             // do reg check of doom
             $this->b = $this->getReal();
 
-            if(($this->b == '/' && strpos('(,=:[!&|?', $this->a) !== false)) {
+            if (($this->b == '/' && strpos('(,=:[!&|?', $this->a) !== false)) {
                 $this->saveRegex();
             }
         }
@@ -337,7 +475,8 @@ class Punifier
      * the next request is ready to go. Another reason for this is to make sure
      * the variables are cleared and are not taking up memory.
      */
-    protected function clean() {
+    protected function clean()
+    {
         unset($this->input);
         $this->index = 0;
         $this->a = $this->b = '';
@@ -350,7 +489,8 @@ class Punifier
      *
      * @return string
      */
-    protected function getChar() {
+    protected function getChar()
+    {
         // Check to see if we had anything in the look ahead buffer and use that.
         if (isset($this->c)) {
             $char = $this->c;
@@ -371,7 +511,7 @@ class Punifier
 
         // Normalize all whitespace except for the newline character into a
         // standard space.
-        if($char !== "\n" && ord($char) < 32) {
+        if ($char !== "\n" && ord($char) < 32) {
             return ' ';
         }
 
@@ -388,7 +528,8 @@ class Punifier
      * @return string            Next 'real' character to be processed.
      * @throws \RuntimeException
      */
-    protected function getReal() {
+    protected function getReal()
+    {
         $startIndex = $this->index;
         $char = $this->getChar();
 
@@ -413,7 +554,7 @@ class Punifier
      * Removed one line comments, with the exception of some very specific types of
      * conditional comments.
      *
-     * @param  int    $startIndex The index point where "getReal" function started
+     * @param  int $startIndex The index point where "getReal" function started
      * @return string
      */
     protected function processOneLineComments($startIndex)
@@ -440,11 +581,12 @@ class Punifier
      * Skips multiline comments where appropriate, and includes them where needed.
      * Conditional comments and "license" style blocks are preserved.
      *
-     * @param  int               $startIndex The index point where "getReal" function started
+     * @param  int $startIndex The index point where "getReal" function started
      * @return bool|string       False if there's no character
      * @throws \RuntimeException Unclosed comments will throw an error
      */
-    protected function processMultiLineComments($startIndex) {
+    protected function processMultiLineComments($startIndex)
+    {
         $this->getChar(); // current C
         $thirdCommentString = $this->getChar();
 
@@ -457,7 +599,8 @@ class Punifier
 
             // Now we reinsert conditional comments and YUI-style licensing comments
             if (($this->options['flaggedComments'] && $thirdCommentString == '!')
-                || ($thirdCommentString == '@') ) {
+                || ($thirdCommentString == '@')
+            ) {
 
                 // If conditional comments or flagged comments are not the first thing in the script
                 // we need to echo a and fill it with a space before moving on.
@@ -480,12 +623,12 @@ class Punifier
             $char = false;
         }
 
-        if($char === false) {
+        if ($char === false) {
             throw new \RuntimeException('Unclosed multiline comment at position: ' . ($this->index - 2));
         }
 
         // if we're here c is part of the comment and therefore tossed
-        if(isset($this->c)) {
+        if (isset($this->c)) {
             unset($this->c);
         }
 
@@ -497,15 +640,16 @@ class Punifier
      * is found the first character of the string is returned and the index is set
      * to it's position.
      *
-     * @param  string       $string
+     * @param  string $string
      * @return string|false Returns the first character of the string or false.
      */
-    protected function getNext($string) {
+    protected function getNext($string)
+    {
         // Find the next occurrence of "string" after the current position.
         $pos = strpos($this->input, $string, $this->index);
 
         // If it's not there return false.
-        if($pos === false) {
+        if ($pos === false) {
             return false;
         }
 
@@ -522,7 +666,8 @@ class Punifier
      *
      * @throws \RuntimeException Unclosed strings will throw an error
      */
-    protected function saveString() {
+    protected function saveString()
+    {
         $startpos = $this->index;
 
         // saveString is always called after a gets cleared, so we push b into
@@ -559,7 +704,7 @@ class Punifier
                 // character, so those will be treated just fine using the switch
                 // block below.
                 case "\n":
-                    throw new \RuntimeException('Unclosed string at position: ' . $startpos );
+                    throw new \RuntimeException('Unclosed string at position: ' . $startpos);
                     break;
 
                 // Escaped characters get picked up here. If it's an escaped new line it's not really needed
@@ -594,11 +739,12 @@ class Punifier
      *
      * @throws \RuntimeException Unclosed regex will throw an error
      */
-    protected function saveRegex() {
+    protected function saveRegex()
+    {
         echo $this->a . $this->b;
 
         while (($this->a = $this->getChar()) !== false) {
-            if($this->a == '/') {
+            if ($this->a == '/') {
                 break;
             }
 
@@ -607,7 +753,7 @@ class Punifier
                 $this->a = $this->getChar();
             }
 
-            if($this->a == "\n") {
+            if ($this->a == "\n") {
                 throw new \RuntimeException('Unclosed regex pattern at position: ' . $this->index);
             }
 
@@ -623,7 +769,8 @@ class Punifier
      * @param  string $char Just one character
      * @return bool
      */
-    protected static function isAlphaNumeric($char) {
+    protected static function isAlphaNumeric($char)
+    {
         return preg_match('/^[\w\$]$/', $char) === 1 || $char == '/';
     }
 
@@ -633,7 +780,8 @@ class Punifier
      * @param  string $php The string to lock
      * @return bool
      */
-    protected function lock($php) {
+    protected function lock($php)
+    {
         /* lock things like <code>"asd" + ++x;</code> */
         $lock = '"LOCK---' . crc32(time()) . '"';
 
@@ -658,7 +806,8 @@ class Punifier
      * @param  string $php The string to unlock
      * @return bool
      */
-    protected function unlock($php) {
+    protected function unlock($php)
+    {
         if (!count($this->locks)) {
             return $php;
         }

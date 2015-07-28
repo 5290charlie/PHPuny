@@ -1,0 +1,45 @@
+#!/usr/bin/php
+<?php
+
+require_once __DIR__ . '/../PHPuny/Punifier.php';
+
+if ($argc > 1) {
+    $input = $argv[1];
+
+    if (file_exists($input)) {
+        $php = file_get_contents($input);
+        $pun = PHPuny\Punifier::punify(file_get_contents($input));
+
+        if ($argc > 2) {
+            $output = $argv[2];
+            echo "Punifying $input -> $output\n";
+
+            if (file_exists($output)) {
+                $line = false;
+
+                do {
+                    if ($line === false) {
+                        echo "Output File: $output exists!\nOverwrite? (y/n) ";
+                    } else {
+                        echo "Please answer Y or N (yes/no) ";
+                    }
+
+                    $line = strtolower(trim(fgets(STDIN)));
+                } while($line != 'y' && $line != 'n');
+
+                if ($line == 'n') {
+                    die("Aborting!\n");
+                }
+            }
+
+            file_put_contents($output, $pun);
+            echo "Finished\n";
+        } else {
+            echo $pun;
+        }
+    } else {
+        echo "Input File: $input does not exist!\n";
+    }
+} else {
+    echo "Usage: punify <infile> [<outfile>]\n";
+}
