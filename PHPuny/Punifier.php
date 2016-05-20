@@ -117,6 +117,8 @@ class Punifier
         'argc',
         'argv',
         'this',
+        '__construct',
+        '__destruct',
     );
 
     /**
